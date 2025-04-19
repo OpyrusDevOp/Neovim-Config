@@ -1,7 +1,97 @@
 return {
   -- Existing Flutter Tools setup
   { "Mofiqul/dracula.nvim" },
-
+  {
+    "jlcrochet/vim-razor",
+    ft = "razor",
+  },
+  {
+    "seblyng/roslyn.nvim",
+    ft = "cs",
+    ---@module 'roslyn.config'
+    ---@type RoslynNvimConfig
+    opts = {
+      -- your configuration comes here; leave empty for default settings
+    },
+  },
+  {
+    "williamboman/mason.nvim",
+    opts = {
+      registries = {
+        "github:mason-org/mason-registry",
+        "github:crashdummyy/mason-registry", -- Required for roslyn and rzls
+      },
+    },
+  },
+  {
+    "seblyng/roslyn.nvim",
+    ft = { "cs", "razor" }, -- Load for C# and Razor files
+    dependencies = {
+      {
+        "tris203/rzls.nvim",
+        config = function()
+          require("rzls").setup({})
+        end,
+      },
+    },
+    config = function()
+      require("roslyn").setup({
+        args = {
+          "--stdio",
+          "--logLevel=Information",
+          "--extensionLogDirectory=" .. vim.fs.dirname(vim.lsp.get_log_path()),
+          "--razorSourceGenerator=" .. vim.fs.joinpath(
+            vim.fn.stdpath("data"),
+            "mason",
+            "packages",
+            "roslyn",
+            "libexec",
+            "Microsoft.CodeAnalysis.Razor.Compiler.dll"
+          ),
+          "--razorDesignTimePath=" .. vim.fs.joinpath(
+            vim.fn.stdpath("data"),
+            "mason",
+            "packages",
+            "rzls",
+            "libexec",
+            "Targets",
+            "Microsoft.NET.Sdk.Razor.DesignTime.targets"
+          ),
+        },
+        config = {
+          handlers = require("rzls.roslyn_handlers"),
+          -- Add any additional roslyn.nvim settings here if needed
+        },
+      })
+    end,
+  },
+  -- Ensure html-lsp is configured for Razor completions and formatting
+  {
+    "neovim/nvim-lspconfig",
+    opts = {
+      servers = {
+        html = {}, -- Enable html-lsp
+      },
+    },
+  },
+  {
+    "Hoffs/omnisharp-extended-lsp.nvim",
+    dependencies = { "neovim/nvim-lspconfig" },
+  },
+  {
+    "ckipp01/nvim-jenkinsfile-linter",
+    dependencies = { "nvim-lua/plenary.nvim" },
+  },
+  {
+    "kylechui/nvim-surround",
+    version = "^3.0.0", -- Use for stability; omit to use `main` branch for the latest features
+    event = "VeryLazy",
+    config = function()
+      require("nvim-surround").setup({
+        -- Configuration here, or leave empty to use defaults
+      })
+    end,
+  },
   -- Configure LazyVim to load dracula
   {
     "LazyVim/LazyVim",
@@ -84,9 +174,12 @@ return {
     opts = {
       servers = {
         omnisharp = {
-          cmd = { "dotnet", "/home/opyrusdev/Programs/omnisharp-linux-x64-net6.0/OmniSharp.dll" }, -- Replace with your OmniSharp.dll path
-          filetypes = { "cs", "vb" },
+          cmd = { "omnisharp" }, -- Replace with your OmniSharp.dll path
+          filetypes = { "cs", "razor", "vb" },
           root_dir = require("lspconfig.util").root_pattern("*.sln", "*.csproj", "omnisharp.json"),
+          handlers = {
+            ["textDocument/definition"] = require("omnisharp_extended").handler,
+          },
           settings = {
             FormattingOptions = {
               EnableEditorConfigSupport = true, -- Use .editorconfig for formatting
@@ -98,10 +191,10 @@ return {
 
               EnableAnalyzersSupport = true, -- Enable analyzers
               EnableImportCompletion = true, -- Enable unimported types/methods in completion
-              AnalyzeOpenDocumentsOnly = false, -- Analyze only open files
+              AnalyzeOpenDocumentsOnly = true, -- Analyze only open files
             },
             Sdk = {
-              IncludePrereleases = true, -- Include .NET SDK previews
+              IncludePrereleases = false, -- Include .NET SDK previews
             },
           },
         },
