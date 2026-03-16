@@ -14,15 +14,7 @@ return {
       -- your configuration comes here; leave empty for default settings
     },
   },
-  {
-    "williamboman/mason.nvim",
-    opts = {
-      registries = {
-        "github:mason-org/mason-registry",
-        "github:crashdummyy/mason-registry", -- Required for roslyn and rzls
-      },
-    },
-  },
+
   {
     "seblyng/roslyn.nvim",
     ft = { "cs", "razor" }, -- Load for C# and Razor files
