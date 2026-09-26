@@ -6,3 +6,6 @@ debug
 foo.*
 *.log
 data
+
+# Arduino-Nvim writes its per-project config to the cwd
+.arduino_config.lua
