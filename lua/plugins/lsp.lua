@@ -165,12 +165,14 @@ return {
     "neovim/nvim-lspconfig",
     opts = {
       servers = {
+
         omnisharp = {
-          cmd = { "omnisharp" }, -- Replace with your OmniSharp.dll path
+          -- cmd/root_dir intentionally left to lspconfig defaults (they need --languageserver etc.)
           filetypes = { "cs", "razor", "vb" },
-          root_dir = require("lspconfig.util").root_pattern("*.sln", "*.csproj", "omnisharp.json"),
           handlers = {
-            ["textDocument/definition"] = require("omnisharp_extended").handler,
+            ["textDocument/definition"] = function(...)
+              return require("omnisharp_extended").handler(...)
+            end,
           },
           settings = {
             FormattingOptions = {
@@ -194,7 +196,7 @@ return {
         cssls = {
           cmd = { "vscode-css-language-server", "--stdio" },
           filetypes = { "css", "scss", "less" },
-          root_dir = require("lspconfig.util").root_pattern("package.json", ".git"),
+          root_markers = { "package.json", ".git" },
           single_file_support = true,
           settings = {
             css = { validate = true },
@@ -244,7 +246,7 @@ return {
         },
         tsserver = { -- For JavaScript/TypeScript files
           filetypes = { "javascript", "typescript", "javascriptreact", "typescriptreact" },
-          root_dir = require("lspconfig.util").root_pattern("package.json", "tsconfig.json", "jsconfig.json", ".git"),
+          root_markers = { "package.json", "tsconfig.json", "jsconfig.json", ".git" },
         },
       },
       config = function()
@@ -323,5 +325,69 @@ return {
         })
       end,
     },
+  },
+  {
+    "yuukiflow/Arduino-Nvim",
+    ft = "arduino",
+    dependencies = { "nvim-telescope/telescope.nvim", "neovim/nvim-lspconfig" },
+    -- setup() only registers autocommands, and they have to exist before any
+    -- buffer is opened: a sketch's .h/.cpp files have filetype "cpp", so
+    -- ft="arduino" would never load this plugin for them and the compilation
+    -- database clangd needs would never be written.  init runs at startup.
+    init = function()
+      require("config.arduino_sketch").setup()
+    end,
+    config = function()
+      -- arduino-language-server 0.7.x panics and dies on two requests:
+      --  * documentHighlight: nil deref whenever clangd returns an error.
+      --  * documentSymbol: clangd >= 21 tags symbols (declaration, definition,
+      --    ...) and clang2IdeSymbolTags panics "not implemented" on any tag
+      --    but Deprecated.  Outline, breadcrumbs and lualine all ask for it.
+      -- Hiding the capabilities is not enough: some plugin asks for symbols
+      -- without checking, so the requests themselves are dropped as well.
+      --
+      -- It also forwards our completion capabilities to clangd, and with
+      -- insertReplaceSupport clangd answers with InsertReplaceEdits, which it
+      -- then fails to decode as TextEdits ("undefined required field range").
+      --
+      -- This has to live on "*": Arduino-Nvim assigns its config wholesale
+      -- (dropping anything set on the named config) and calls vim.lsp.enable,
+      -- which starts the server synchronously, so there is no gap to patch it
+      -- in afterwards.
+      local arduino_blocked = {
+        ["textDocument/documentHighlight"] = true,
+        ["textDocument/documentSymbol"] = true,
+      }
+      vim.lsp.config("*", {
+        before_init = function(params, config)
+          if config.name == "arduino-language-server" then
+            local item = vim.tbl_get(params, "capabilities", "textDocument", "completion", "completionItem")
+            if item then
+              item.insertReplaceSupport = false
+            end
+          end
+        end,
+        on_init = function(client)
+          if client.name == "arduino-language-server" then
+            client.server_capabilities.documentHighlightProvider = false
+            client.server_capabilities.documentSymbolProvider = false
+            local request = client.request
+            client.request = function(self, method, ...)
+              if arduino_blocked[method] then
+                return false
+              end
+              return request(self, method, ...)
+            end
+          end
+        end,
+      })
+
+      require("Arduino-Nvim").setup()
+
+      -- Quick keymaps for compilation and flashing
+      vim.keymap.set("n", "<leader>ac", "<cmd>InoCheck<cr>", { desc = "Arduino: Compile Sketch" })
+      vim.keymap.set("n", "<leader>au", "<cmd>InoUpload<cr>", { desc = "Arduino: Upload Sketch" })
+      vim.keymap.set("n", "<leader>as", "<cmd>InoMonitor<cr>", { desc = "Arduino: Serial Monitor" })
+    end,
   },
 }
