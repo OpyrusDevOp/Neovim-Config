@@ -354,10 +354,37 @@ return {
       -- (dropping anything set on the named config) and calls vim.lsp.enable,
       -- which starts the server synchronously, so there is no gap to patch it
       -- in afterwards.
+      --
+      -- Editing near a function signature can also desync it for good: its
+      -- .ino -> .ino.cpp line map stops updating (a short-circuited
+      -- `dirty = dirty || s.addInoLine(...)` in sourcemapper), clangd rejects
+      -- the next edit ("Range's end position is before start position") and
+      -- drops the file.  Its own rebuild only sends a didChange, which clangd
+      -- ignores for a dropped file, so every request fails with "non-added
+      -- document" until a restart.  Reopening the buffer makes it didOpen the
+      -- rebuilt .ino.cpp again.
       local arduino_blocked = {
         ["textDocument/documentHighlight"] = true,
         ["textDocument/documentSymbol"] = true,
       }
+      local arduino_crashes = {} -- uv.now() of recent crashes
+      local arduino_resync_pending = false
+      local function arduino_resync(client)
+        if arduino_resync_pending then
+          return
+        end
+        arduino_resync_pending = true
+        vim.defer_fn(function()
+          arduino_resync_pending = false
+          if client:is_stopped() then
+            return
+          end
+          for bufnr in pairs(vim.deepcopy(client.attached_buffers)) do
+            vim.lsp.buf_detach_client(bufnr, client.id)
+            vim.lsp.buf_attach_client(bufnr, client.id)
+          end
+        end, 500)
+      end
       vim.lsp.config("*", {
         before_init = function(params, config)
           if config.name == "arduino-language-server" then
@@ -378,6 +405,39 @@ return {
               end
               return request(self, method, ...)
             end
+          end
+        end,
+        -- The same stale line map can also make it panic ("Line access out of
+        -- range") and exit.  Nothing restarts it, so bring it back ourselves,
+        -- a few times at most in case it dies on startup.
+        on_exit = function(code, _, client_id)
+          local client = vim.lsp.get_client_by_id(client_id)
+          if code == 0 or not client or client.name ~= "arduino-language-server" then
+            return
+          end
+          local now = vim.uv.now()
+          arduino_crashes = vim.tbl_filter(function(t)
+            return now - t < 60000
+          end, arduino_crashes)
+          if #arduino_crashes >= 3 then
+            return vim.notify("arduino-language-server keeps crashing, not restarting it", vim.log.levels.ERROR)
+          end
+          table.insert(arduino_crashes, now)
+          local bufs = vim.tbl_keys(client.attached_buffers)
+          vim.defer_fn(function()
+            for _, bufnr in ipairs(bufs) do
+              if vim.api.nvim_buf_is_loaded(bufnr) then
+                vim.api.nvim_exec_autocmds("FileType", { group = "nvim.lsp.enable", buffer = bufnr })
+              end
+            end
+          end, 1000)
+        end,
+        -- Its error replies also carry `result: null`, which Neovim rejects as
+        -- INVALID_SERVER_MESSAGE, so they surface here and not in handlers.
+        on_error = function(_, err)
+          local client = vim.lsp.get_clients({ name = "arduino-language-server" })[1]
+          if client and vim.inspect(err):find("non%-added document") then
+            arduino_resync(client)
           end
         end,
       })
